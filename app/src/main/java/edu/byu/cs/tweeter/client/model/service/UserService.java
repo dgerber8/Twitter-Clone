@@ -1,11 +1,8 @@
-package edu.byu.cs.tweeter.client.model.service;
+package edu.byu.cs.tweeter.client.model.service.backgroundTasks.handler;
 
-import android.content.Intent;
-import android.os.Bundle;
 import android.os.Handler;
 import android.os.Message;
-import android.util.Log;
-import android.widget.Toast;
+import android.widget.EditText;
 
 import androidx.annotation.NonNull;
 
@@ -13,10 +10,11 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 import edu.byu.cs.tweeter.client.cache.Cache;
-import edu.byu.cs.tweeter.client.view.main.MainActivity;
+import edu.byu.cs.tweeter.client.model.service.backgroundTasks.GetUserTask;
+import edu.byu.cs.tweeter.client.model.service.backgroundTasks.LoginTask;
+import edu.byu.cs.tweeter.client.model.service.backgroundTasks.RegisterTask;
 import edu.byu.cs.tweeter.model.domain.AuthToken;
 import edu.byu.cs.tweeter.model.domain.User;
-import edu.byu.cs.tweeter.util.FakeData;
 
 public class UserService {
 
@@ -25,97 +23,31 @@ public class UserService {
         void handleFailure(String message);
     }
 
+    public interface MakeUserObserver {
+        void handleSuccess(User user);
+        void handleFailure(String message);
+    }
+
+    public void register(EditText firstName, EditText lastName, EditText alias, EditText password, String imageBytesBase64, MakeUserObserver registerObserver) {
+        RegisterTask registerTask = new RegisterTask(firstName.getText().toString(), lastName.getText().toString(),
+                alias.getText().toString(), password.getText().toString(), imageBytesBase64, new RegisterHandler(registerObserver));
+
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        executor.execute(registerTask);
+    }
+
+    public void login(EditText alias, EditText password, UserService.GetUserObserver loginObserver) {
+        LoginTask loginTask = new LoginTask(alias.getText().toString(),
+                password.getText().toString(), new UserService.LoginHandler(loginObserver));
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        executor.execute(loginTask);
+    }
+
     public void getUser(String alias, GetUserObserver getUserObserver) {
-        UserService.GetUserTask getUserTask = new UserService.GetUserTask(Cache.getInstance().getCurrUserAuthToken(),
+        GetUserTask getUserTask = new GetUserTask(Cache.getInstance().getCurrUserAuthToken(),
                 alias, new GetUserHandler(getUserObserver));
         ExecutorService executor = Executors.newSingleThreadExecutor();
         executor.execute(getUserTask);
-    }
-
-    /**
-     * Background task that returns the profile for a specified user.
-     */
-    public static class GetUserTask implements Runnable {
-        private static final String LOG_TAG = "GetUserTask";
-
-        public static final String SUCCESS_KEY = "success";
-        public static final String USER_KEY = "user";
-        public static final String MESSAGE_KEY = "message";
-        public static final String EXCEPTION_KEY = "exception";
-
-        /**
-         * Auth token for logged-in user.
-         */
-        private AuthToken authToken;
-        /**
-         * Alias (or handle) for user whose profile is being retrieved.
-         */
-        private String alias;
-        /**
-         * Message handler that will receive task results.
-         */
-        private Handler messageHandler;
-
-        public GetUserTask(AuthToken authToken, String alias, Handler messageHandler) {
-            this.authToken = authToken;
-            this.alias = alias;
-            this.messageHandler = messageHandler;
-        }
-
-        @Override
-        public void run() {
-            try {
-                User user = getUser();
-
-                sendSuccessMessage(user);
-
-            } catch (Exception ex) {
-                Log.e(LOG_TAG, ex.getMessage(), ex);
-                sendExceptionMessage(ex);
-            }
-        }
-
-        private FakeData getFakeData() {
-            return new FakeData();
-        }
-
-        private User getUser() {
-            User user = getFakeData().findUserByAlias(alias);
-            return user;
-        }
-
-        private void sendSuccessMessage(User user) {
-            Bundle msgBundle = new Bundle();
-            msgBundle.putBoolean(SUCCESS_KEY, true);
-            msgBundle.putSerializable(USER_KEY, user);
-
-            Message msg = Message.obtain();
-            msg.setData(msgBundle);
-
-            messageHandler.sendMessage(msg);
-        }
-
-        private void sendFailedMessage(String message) {
-            Bundle msgBundle = new Bundle();
-            msgBundle.putBoolean(SUCCESS_KEY, false);
-            msgBundle.putString(MESSAGE_KEY, message);
-
-            Message msg = Message.obtain();
-            msg.setData(msgBundle);
-
-            messageHandler.sendMessage(msg);
-        }
-
-        private void sendExceptionMessage(Exception exception) {
-            Bundle msgBundle = new Bundle();
-            msgBundle.putBoolean(SUCCESS_KEY, false);
-            msgBundle.putSerializable(EXCEPTION_KEY, exception);
-
-            Message msg = Message.obtain();
-            msg.setData(msgBundle);
-
-            messageHandler.sendMessage(msg);
-        }
     }
 
     /**
@@ -130,16 +62,75 @@ public class UserService {
 
         @Override
         public void handleMessage(@NonNull Message msg) {
-            boolean success = msg.getData().getBoolean(UserService.GetUserTask.SUCCESS_KEY);
+            boolean success = msg.getData().getBoolean(GetUserTask.SUCCESS_KEY);
             if (success) {
-                User user = (User) msg.getData().getSerializable(UserService.GetUserTask.USER_KEY);
+                User user = (User) msg.getData().getSerializable(GetUserTask.USER_KEY);
                 observer.handleSuccess(user);
-            } else if (msg.getData().containsKey(UserService.GetUserTask.MESSAGE_KEY)) {
-                String message = msg.getData().getString(UserService.GetUserTask.MESSAGE_KEY);
+            } else if (msg.getData().containsKey(GetUserTask.MESSAGE_KEY)) {
+                String message = msg.getData().getString(GetUserTask.MESSAGE_KEY);
                 observer.handleFailure(message);
-            } else if (msg.getData().containsKey(UserService.GetUserTask.EXCEPTION_KEY)) {
-                Exception ex = (Exception) msg.getData().getSerializable(UserService.GetUserTask.EXCEPTION_KEY);
+            } else if (msg.getData().containsKey(GetUserTask.EXCEPTION_KEY)) {
+                Exception ex = (Exception) msg.getData().getSerializable(GetUserTask.EXCEPTION_KEY);
                 String message = "Failed to get following because of exception: " + ex.getMessage();
+                observer.handleFailure(message);
+            }
+        }
+    }
+
+
+    private class LoginHandler extends Handler {
+        private GetUserObserver observer;
+
+        public LoginHandler(GetUserObserver observer) { this.observer = observer; }
+
+        @Override
+        public void handleMessage(@NonNull Message msg) {
+            boolean success = msg.getData().getBoolean(LoginTask.SUCCESS_KEY);
+
+            if (success) {
+                User loggedInUser = (User) msg.getData().getSerializable(LoginTask.USER_KEY);
+                AuthToken authToken = (AuthToken) msg.getData().getSerializable(LoginTask.AUTH_TOKEN_KEY);
+
+                // Cache user session information
+                Cache.getInstance().setCurrUser(loggedInUser);
+                Cache.getInstance().setCurrUserAuthToken(authToken);
+
+                observer.handleSuccess(loggedInUser);
+            } else if (msg.getData().containsKey(LoginTask.MESSAGE_KEY)) {
+                String message = msg.getData().getString(LoginTask.MESSAGE_KEY);
+                observer.handleFailure("Failed to login: " + message);
+            } else if (msg.getData().containsKey(LoginTask.EXCEPTION_KEY)) {
+                Exception ex = (Exception) msg.getData().getSerializable(LoginTask.EXCEPTION_KEY);
+                String message = "Failed to login because of exception: " + ex.getMessage();
+                observer.handleFailure(message);
+            }
+        }
+    }
+
+    private class RegisterHandler extends Handler {
+        private MakeUserObserver observer;
+
+        public RegisterHandler(MakeUserObserver observer) {
+            this.observer = observer;
+        }
+
+        @Override
+        public void handleMessage(@NonNull Message msg) {
+            boolean success = msg.getData().getBoolean(RegisterTask.SUCCESS_KEY);
+            if (success) {
+                User registeredUser = (User) msg.getData().getSerializable(RegisterTask.USER_KEY);
+                AuthToken authToken = (AuthToken) msg.getData().getSerializable(RegisterTask.AUTH_TOKEN_KEY);
+
+                Cache.getInstance().setCurrUser(registeredUser);
+                Cache.getInstance().setCurrUserAuthToken(authToken);
+
+                observer.handleSuccess(registeredUser);
+            } else if (msg.getData().containsKey(RegisterTask.MESSAGE_KEY)) {
+                String message = msg.getData().getString(RegisterTask.MESSAGE_KEY);
+                observer.handleFailure("Failed to register: " + message);
+            } else if (msg.getData().containsKey(RegisterTask.EXCEPTION_KEY)) {
+                Exception ex = (Exception) msg.getData().getSerializable(RegisterTask.EXCEPTION_KEY);
+                String message = "Failed to register because of exception: " + ex.getMessage();
                 observer.handleFailure(message);
             }
         }
